@@ -1,4 +1,37 @@
-# SonarQube – Complete DevOps Practical Guide
+# SonarQube: Complete DevOps Practical Guide
+
+A hands-on guide to installing SonarQube on AWS EC2, managing access and quality rules, and connecting it to a Maven project and a CI/CD pipeline.
+
+## At a glance
+
+**What this lab covers:** a SonarQube server on Ubuntu EC2 (with PostgreSQL) that analyzes a Maven project and reports bugs, vulnerabilities, code smells, security hotspots, and a Quality Gate result.
+
+**Tech:** SonarQube Community Build `26.10.0.133078` · Java 21 · PostgreSQL · Apache Maven · Ubuntu on AWS EC2
+
+**Skills practiced:** Linux service setup (systemd), database setup, users/groups/permissions, Quality Profiles and Quality Gates, token handling, Maven integration, CI/CD integration, troubleshooting.
+
+**Related:** the full pipeline that uses this SonarQube server (GitHub → Jenkins → Maven → SonarQube → Nexus → Tomcat) is at <https://github.com/Ramana175/Jenkins->.
+
+## Table of contents
+
+1. [What Is SonarQube?](#1-what-is-sonarqube)
+2. [Why Is SonarQube Important for DevOps Engineers?](#2-why-is-sonarqube-important-for-devops-engineers)
+3. [SonarQube Architecture](#3-sonarqube-architecture)
+4. [Environment Used for This Practical](#4-environment-used-for-this-practical)
+5. [Install SonarQube on Ubuntu EC2](#5-install-sonarqube-on-ubuntu-ec2)
+6. [SonarQube Users and Groups](#6-sonarqube-users-and-groups)
+7. [Global Permissions and Project Permissions](#7-global-permissions-and-project-permissions)
+8. [Project Visibility](#8-project-visibility)
+9. [Quality Profiles](#9-quality-profiles)
+10. [Quality Gates](#10-quality-gates)
+11. [Permission Templates](#11-permission-templates)
+12. [Run SonarQube Analysis on a Maven Project](#12-run-sonarqube-analysis-on-a-maven-project)
+    - [12.1 Maven configuration options](#121-maven-configuration-options)
+    - [12.2 A small story: how Maven and SonarQube are connected](#122-a-small-story-how-maven-and-sonarqube-are-connected)
+13. [SonarQube in a CI/CD Pipeline](#13-sonarqube-in-a-cicd-pipeline)
+14. [Troubleshooting](#14-troubleshooting)
+15. [SonarQube Administration Checklist](#15-sonarqube-administration-checklist)
+16. [Final Outcome](#16-final-outcome)
 
 ## 1. What Is SonarQube?
 
@@ -45,7 +78,10 @@ SonarQube consists of several important components.
 
 ### Analysis workflow
 
-Developer → Git Repository → CI/CD Pipeline → Build and Tests → SonarQube Scanner → SonarQube Server → Quality Gate → Deployment Decision
+```text
+Developer → Git Repository → CI/CD Pipeline → Build and Tests
+         → SonarQube Scanner → SonarQube Server → Quality Gate → Deployment Decision
+```
 
 ## 4. Environment Used for This Practical
 
@@ -60,6 +96,8 @@ The learning environment uses:
 - Project: `devops-demo`
 
 The SonarQube version used during the lab was `26.10.0.133078`. Check the requirements for the version you install before selecting Java, database, and operating-system configurations.
+
+**Instance size:** SonarQube runs a web server, a compute engine, and a search engine (Elasticsearch) together. A very small instance (for example 1 GB of RAM) often fails to start or is killed for lack of memory. Check the hardware requirements for your version and choose an instance with enough memory.
 
 ## 5. Install SonarQube on Ubuntu EC2
 
@@ -195,7 +233,12 @@ sonar.jdbc.password=REPLACE_WITH_STRONG_PASSWORD
 sonar.jdbc.url=jdbc:postgresql://localhost:5432/sonarqube
 ```
 
-Save the file and exit. Keep the configuration file private because it contains database credentials.
+Save the file and exit. Keep the configuration file private because it contains database credentials. Restrict who can read it:
+
+```bash
+sudo chown sonarqube:sonarqube /opt/sonarqube/sonarqube-<version>/conf/sonar.properties
+sudo chmod 640 /opt/sonarqube/sonarqube-<version>/conf/sonar.properties
+```
 
 ### Step 9: Configure Linux requirements
 
@@ -210,10 +253,21 @@ free -h
 df -h
 ```
 
-Check the file descriptor limit:
+Check the current limits:
 
 ```bash
 ulimit -n
+sysctl vm.max_map_count
+sysctl fs.file-max
+```
+
+Sonatype's documentation has listed minimums for these values, such as `vm.max_map_count` of at least `524288` and `fs.file-max` of at least `131072`. **Confirm the exact numbers for your release** before applying them. If the values are too low, SonarQube often fails to start with an Elasticsearch error about `vm.max_map_count`.
+
+To apply a value permanently (example, using the number above):
+
+```bash
+echo "vm.max_map_count=524288" | sudo tee /etc/sysctl.d/99-sonarqube.conf
+sudo sysctl --system
 ```
 
 Do not apply arbitrary kernel settings from an unrelated SonarQube version. Configure the values required by your installed release.
@@ -249,7 +303,7 @@ SuccessExitStatus=143
 WantedBy=multi-user.target
 ```
 
-**Important:** This is an example service definition. Verify the startup method and JAR filename for your exact SonarQube release before using it. Do not blindly replace a working service configuration.
+**Important:** This is an example service definition. Verify the startup method and JAR filename for your exact SonarQube release before using it. Sonatype's documentation also shows a unit that starts SonarQube through the `sonar.sh` script in the `bin` directory; use whichever method your release's documentation recommends. Do not blindly replace a working service configuration.
 
 ### Step 11: Start SonarQube
 
@@ -279,6 +333,8 @@ Check whether port 9000 is listening:
 sudo ss -lntp | grep ':9000'
 ```
 
+SonarQube can take a minute or two to start. Wait before concluding that it failed.
+
 ### Step 12: Access the web interface
 
 Open the following address in your browser:
@@ -287,7 +343,7 @@ Open the following address in your browser:
 http://<EC2-PUBLIC-IP>:9000
 ```
 
-Replace the placeholder with your instance's public IP address.
+Replace the placeholder with your instance's public IP address. The public IP can change after an EC2 stop/start unless you use an Elastic IP, so copy the current one from the EC2 console.
 
 If the page does not open, check the service status, logs, network configuration, and EC2 security group.
 
@@ -474,7 +530,9 @@ mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
 
 Replace the placeholder with your SonarQube URL.
 
-Use a plugin version compatible with the installed SonarQube release. For production, use HTTPS and store credentials in your CI/CD platform's secret store.
+Use a plugin version compatible with the installed SonarQube release, and pin it for repeatable builds (for example `org.sonarsource.scanner.maven:sonar-maven-plugin:<version>:sonar`; the CI/CD project in this portfolio pins `5.8.0.7211`). For production, use HTTPS and store credentials in your CI/CD platform's secret store.
+
+The scanner can also read the token from the `SONAR_TOKEN` environment variable. If you exported it in Step 2, you can leave out `-Dsonar.token`, which keeps the token out of the process list.
 
 ### Step 4: Verify results
 
@@ -484,6 +542,121 @@ Use a plugin version compatible with the installed SonarQube release. For produc
 4. Review bugs, vulnerabilities, code smells, and security hotspots.
 5. Review the Quality Gate result.
 6. Investigate any failed conditions.
+
+### 12.1 Maven configuration options
+
+Maven needs to know **where SonarQube is** and **who is submitting**. There are three common places for the address, and you only need one.
+
+**Option 1: on the command line** (shown in Step 3).
+
+```bash
+-Dsonar.host.url=http://<SONARQUBE_HOST>:9000
+```
+
+**Option 2: inside the existing `<properties>` block of `pom.xml`.** Do not create a second `<properties>` block.
+
+```xml
+<properties>
+    <sonar.host.url>http://SONARQUBE_HOST:9000</sonar.host.url>
+    <!-- Optional: by default the project key is groupId:artifactId -->
+    <sonar.projectKey>com.example:devops-demo</sonar.projectKey>
+</properties>
+```
+
+**Option 3: in `~/.m2/settings.xml`, so every Maven project on that machine uses it.**
+
+```xml
+<profiles>
+  <profile>
+    <id>sonar</id>
+    <activation>
+      <activeByDefault>true</activeByDefault>
+    </activation>
+    <properties>
+      <sonar.host.url>http://SONARQUBE_HOST:9000</sonar.host.url>
+    </properties>
+  </profile>
+</profiles>
+```
+
+Rules:
+
+- The **address** can be in `pom.xml` or `settings.xml`. It is not a secret.
+- The **token** is a secret. Keep it in an environment variable, Jenkins Credentials, or another secret store. Never put it in `pom.xml` or GitHub.
+- The **project key** is how SonarQube names the project. Keep it the same between runs, or SonarQube will treat it as a new project.
+
+### 12.2 A small story: how Maven and SonarQube are connected
+
+#### The story: the Teacher and the Homework
+
+Maven is a **student** who finishes homework (the code). SonarQube is the **teacher** who checks it and gives marks (bugs, vulnerabilities, code smells, and a pass or fail from the Quality Gate).
+
+For the homework to reach the teacher and be marked, the student needs four things.
+
+**1. The teacher's room address. That is `sonar.host.url`.**
+Without it, the student walks to the nearest room (`localhost`), which is the wrong place. The homework never arrives, even though it was done well.
+
+**2. A permission slip. That is the token (`SONAR_TOKEN`).**
+The teacher only accepts homework from students who have a slip. The slip is a secret. If you post it in a public place (GitHub), a stranger can hand in homework with your name. So it stays in a locked box (an environment variable or Jenkins Credentials).
+
+**3. A name on the folder. That is the project key.**
+The teacher keeps one folder per project. By default the name is `groupId:artifactId`. If the name changes, the teacher starts a new folder and the old marks are not connected.
+
+**4. A way to get the result. That is the Quality Gate.**
+The teacher gives a **pass or fail** mark. With `-Dsonar.qualitygate.wait=true`, the student waits outside the room for the mark, and the build fails when the mark is a fail. Without it, the student hands in the homework and leaves, so the build can succeed even when the gate fails.
+
+#### What happens when you run the Maven command
+
+```text
+1. Student finishes the work        -> mvn clean verify (compile and tests)
+2. Student takes the work to the teacher's room
+                                    -> reads sonar.host.url (the address)
+3. Student shows the permission slip
+                                    -> reads SONAR_TOKEN (the secret)
+4. Teacher opens the project folder -> uses the project key
+5. Teacher checks the work          -> Quality Profile rules
+6. Teacher gives pass or fail       -> Quality Gate result
+7. Student sees the mark            -> only if sonar.qualitygate.wait=true
+```
+
+#### Where each part is configured
+
+| What the student needs | Where it is configured | Story name |
+|---|---|---|
+| Where SonarQube is | `-Dsonar.host.url`, `pom.xml` `<properties>`, or `settings.xml` profile | The teacher's room address |
+| Who is allowed to submit | `SONAR_TOKEN` (shell, Jenkins Credentials) | The permission slip |
+| Which project it is | `sonar.projectKey` (default `groupId:artifactId`) | The name on the folder |
+| Which rules are used | Quality Profile in SonarQube | The teacher's checklist |
+| Pass or fail | Quality Gate in SonarQube | The final mark |
+| Fail the build on a fail mark | `-Dsonar.qualitygate.wait=true` | Waiting outside for the mark |
+
+#### Why we update this configuration
+
+Because in a cloud lab, things change.
+
+- The SonarQube server gets a **new public IP** after an EC2 stop/start, so the address must be updated.
+- A **token** is regenerated, expires, or is revoked, so the secret must be updated.
+- The project **groupId or artifactId** changes, so the project key changes too.
+- A **new Quality Gate** is assigned, so the pass or fail result can change.
+
+#### What breaks if we do not update
+
+| If this is wrong | What you see |
+|---|---|
+| No address, or an old IP | `Connection refused`, a timeout, or the scan goes to `localhost` |
+| Missing or wrong token | `Not authorized` or a `401` error |
+| Account lacks Execute Analysis permission | `Insufficient privileges` or a `403` error |
+| Project key changed | A new, empty project appears in SonarQube |
+| Quality Gate fails and `qualitygate.wait` is not set | Build shows `BUILD SUCCESS`, but the gate is red in SonarQube |
+
+#### Remember
+
+1. The **address** can be in `pom.xml`. The **token** never goes there.
+2. Keep the token in an environment variable or Jenkins Credentials.
+3. Keep the **project key** stable.
+4. After an IP change, update the address everywhere it is set.
+5. `BUILD SUCCESS` means the scan ran. It does not mean the Quality Gate passed, unless you use `sonar.qualitygate.wait`.
+6. Change one thing at a time, then run the analysis again to test.
 
 ## 13. SonarQube in a CI/CD Pipeline
 
@@ -501,6 +674,41 @@ The exact configuration depends on whether the team uses Jenkins, GitHub Actions
 
 A DevOps engineer should ensure that the pipeline uses a valid token, the correct project key, a reachable SonarQube server, and appropriate Quality Gate handling.
 
+### Example: Jenkins pipeline stage
+
+This is an illustrative outline. Adapt the credential ID, server address, and Maven setup to your environment. The token is stored in Jenkins Credentials as a **Secret text** credential.
+
+```groovy
+pipeline {
+    agent any
+
+    environment {
+        SONAR_HOST_URL = 'http://YOUR_SONARQUBE_HOST:9000'
+    }
+
+    stages {
+        stage('SonarQube analysis') {
+            steps {
+                withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                    sh '''
+                        mvn clean verify \
+                          org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+                          -Dsonar.host.url="$SONAR_HOST_URL" \
+                          -Dsonar.qualitygate.wait=true
+                    '''
+                }
+            }
+        }
+    }
+}
+```
+
+Notes:
+
+- The shell block uses single-style quotes (`'''`), so the secret is expanded by the shell and not copied into the Groovy script.
+- `-Dsonar.qualitygate.wait=true` makes the build fail when the Quality Gate fails. Without it, a failed gate does not stop the pipeline.
+- Never print the token in the build log.
+
 ## 14. Troubleshooting
 
 ### SonarQube page does not open
@@ -511,7 +719,7 @@ sudo ss -lntp | grep ':9000'
 sudo journalctl -u sonarqube -n 100 --no-pager
 ```
 
-Also check the EC2 security group and network configuration.
+Also check the EC2 security group and network configuration, and check that the public IP has not changed.
 
 ### SonarQube fails to start
 
@@ -520,6 +728,8 @@ Also check the EC2 security group and network configuration.
 - Check Java compatibility.
 - Check file permissions.
 - Check memory, disk space, and operating-system requirements.
+- If the log mentions `vm.max_map_count` being too low, raise it as described in Step 9.
+- If the process is killed with no clear error, the instance may be too small for SonarQube.
 
 ### Maven analysis fails
 
@@ -528,6 +738,7 @@ Also check the EC2 security group and network configuration.
 - Verify Execute Analysis permission.
 - Check the project key.
 - Confirm that the server is running and reachable.
+- If you changed nothing but it stopped working after a stop/start, the SonarQube IP has probably changed. Update `sonar.host.url`.
 
 ### Quality Gate fails
 
@@ -536,6 +747,21 @@ Also check the EC2 security group and network configuration.
 - Inspect the corresponding metric.
 - Check whether coverage data was imported.
 - Fix the underlying issue or review the threshold according to the project's policy.
+
+### Build succeeds but SonarQube shows a failed Quality Gate
+
+- This is expected when the scanner is not told to wait for the result.
+- Add `-Dsonar.qualitygate.wait=true` so the build fails with the gate.
+
+### Quick reference
+
+| Message or symptom | Likely cause | What to check |
+|---|---|---|
+| `Not authorized` or `401` | Wrong, expired, or missing token | Regenerate the token and update where it is stored |
+| `403` or `Insufficient privileges` | The account cannot analyze this project | Execute Analysis permission on the project |
+| `Connection refused` or timeout | Old IP, port closed, or service stopped | Current IP, security group on port `9000`, service status |
+| A new empty project appears | Project key changed | `sonar.projectKey`, or `groupId` and `artifactId` |
+| Coverage shows 0% | No coverage report imported | Coverage tool setup, such as a coverage plugin |
 
 ## 15. SonarQube Administration Checklist
 
@@ -559,3 +785,5 @@ Also check the EC2 security group and network configuration.
 ## 16. Final Outcome
 
 After completing these practical exercises, a DevOps engineer should understand how to install and operate SonarQube, manage access, configure code-quality rules and Quality Gates, analyze a Maven project, troubleshoot common failures, and integrate code analysis into a CI/CD workflow.
+
+**Next step:** use this SonarQube server from a Jenkins pipeline together with Nexus and Tomcat: <https://github.com/Ramana175/Jenkins->.
